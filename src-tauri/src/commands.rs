@@ -12,7 +12,18 @@ pub async fn set_orientation(landscape: bool, plugin: tauri::State<'_, Orientati
         .map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn set_orientation(app: tauri::AppHandle, landscape: bool) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(crate::ios_platform::request_orientation(landscape));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.await.map_err(|_| "屏幕方向切换已取消".to_string())?
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub fn set_orientation(landscape: bool) -> Result<(), String> {
     let _ = landscape;

@@ -1,9 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { platform } from "./environment";
 
-/** Rotate the Android activity itself; browser-only playback uses the Screen API. */
+/** Rotate the native mobile container (Android/iOS); browser-only playback uses the Screen API. */
 export async function setMobileOrientation(landscape: boolean): Promise<void> {
-  if (platform === "android" && isTauri()) {
+  if ((platform === "android" || platform === "ios") && isTauri()) {
     await invoke("set_orientation", { landscape });
     return;
   }

@@ -56,14 +56,25 @@ pub async fn pick_plugin_directory(app: tauri::AppHandle) -> Result<Value> {
 #[tauri::command]
 pub async fn pick_plugin_files(app: tauri::AppHandle) -> Result<Vec<String>> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .add_filter("HPP 插件或列表", &["js", "mjs", "json"])
+        let dialog = app.dialog().file();
+        // iOS 文件选择器对未注册的 .mjs 或转发文件常会变灰，跳过扩展名过滤以使用通用 UTType.item。
+        #[cfg(not(target_os = "ios"))]
+        let dialog = dialog.add_filter("HPP 插件或列表", &["js", "mjs", "json"]);
+        let files = dialog
             .blocking_pick_files()
             .unwrap_or_default()
             .into_iter()
-            .map(|file| Ok(file.to_string()))
-            .collect()
+            .map(|file| {
+                // iOS 文档选择器可能返回 file:// URL，将其转为本地路径以供 distribution::load_document 读取；
+                // Android content:// 等非本地路径 URI 则保留原字符串走 DocumentReader。
+                let fallback = file.to_string();
+                match file.into_path() {
+                    Ok(path) => path.to_string_lossy().into_owned(),
+                    Err(_) => fallback,
+                }
+            })
+            .collect();
+        Ok(files)
     })
     .await
     .map_err(|_| hghub_hpp::PluginError::internal("无法打开文件选择器"))?

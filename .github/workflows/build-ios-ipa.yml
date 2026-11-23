@@ -1,0 +1,194 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "应用版本号（留空则读取 package.json 中的 version）"
+        required: false
+        default: ""
+        type: string
+      bundle_id:
+        description: "iOS Bundle Identifier（默认 com.hghub.player）"
+        required: false
+        default: "com.hghub.player"
+        type: string
+      display_name:
+        description: "App 桌面显示名称（默认 HGhub）"
+        required: false
+        default: "HGhub"
+        type: string
+      signing_mode:
+        description: "打包签名模式（unsigned: 未签名 / adhoc: Ad-Hoc 临时签名）"
+        required: false
+        default: "unsigned"
+        type: choice
+        options:
+          - unsigned
+          - adhoc
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "scripts/**"
+      - "package.json"
+      - ".github/workflows/build-ios-ipa.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+
+jobs:
+  frontend-check:
+    name: 前端构建与 iOS 兼容自检
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 编译与类型检查
+        run: pnpm build
+
+      - name: 运行媒体能力与 iOS 兼容单测
+        run: |
+          node scripts/test-media-capabilities.mjs
+          node scripts/test-ios-compat.mjs
+
+      - name: 校验 iOS Shell 脚本语法
+        run: bash -n scripts/patch-ios-plist.sh scripts/build-ios-unsigned.sh
+
+  ios-ipa:
+    name: 编译并校验 iOS IPA
+    needs: frontend-check
+    runs-on: macos-latest
+    env:
+      APPLE_DEVELOPMENT_TEAM: "ABCDE12345"
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装 Rust iOS 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: 缓存 Rust 编译产物
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios-build
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 解析并同步版本、Bundle ID 与显示名称
+        id: cfg
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUNDLE_ID: ${{ inputs.bundle_id }}
+          INPUT_DISPLAY_NAME: ${{ inputs.display_name }}
+          INPUT_SIGNING_MODE: ${{ inputs.signing_mode }}
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const fs = require('node:fs');
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const tauriConf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+
+          const inputVersion = (process.env.INPUT_VERSION || '').trim();
+          const ref = process.env.GITHUB_REF || '';
+          const refName = process.env.GITHUB_REF_NAME || '';
+
+          let version = pkg.version;
+          if (inputVersion) {
+            version = inputVersion.replace(/^v/, '');
+          } else if (ref.startsWith('refs/tags/v')) {
+            version = refName.replace(/^v/, '');
+          }
+
+          const bundleId = (process.env.INPUT_BUNDLE_ID || '').trim() || 'com.hghub.player';
+          const displayName = (process.env.INPUT_DISPLAY_NAME || '').trim() || 'HGhub';
+          const signingMode = (process.env.INPUT_SIGNING_MODE || '').trim() || 'unsigned';
+
+          pkg.version = version;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+          tauriConf.version = version;
+          tauriConf.identifier = bundleId;
+          if (/^[A-Za-z0-9._ -]+$/.test(displayName)) {
+            tauriConf.productName = displayName;
+          }
+          if (tauriConf.app && Array.isArray(tauriConf.app.windows) && tauriConf.app.windows[0]) {
+            tauriConf.app.windows[0].title = displayName;
+          }
+          fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(tauriConf, null, 2) + '\n');
+
+          const outFile = process.env.GITHUB_OUTPUT;
+          fs.appendFileSync(
+            outFile,
+            `version=${version}\nbundle_id=${bundleId}\ndisplay_name=${displayName}\nsigning_mode=${signingMode}\n`
+          );
+          EOF
+
+      - name: 初始化 iOS Xcode 工程并注入 Info.plist 能力
+        env:
+          APP_DISPLAY_NAME: ${{ steps.cfg.outputs.display_name }}
+        run: |
+          set -euo pipefail
+          pnpm tauri ios init --ci
+          while IFS= read -r -d '' plist; do
+            bash scripts/patch-ios-plist.sh "$plist" "$APP_DISPLAY_NAME"
+          done < <(find src-tauri/gen/apple -name "Info.plist" -print0)
+
+      - name: 构建 iOS IPA 并执行包体校验
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.cfg.outputs.version }}
+          APP_DISPLAY_NAME: ${{ steps.cfg.outputs.display_name }}
+          SIGNING_MODE: ${{ steps.cfg.outputs.signing_mode }}
+        run: bash scripts/build-ios-unsigned.sh "$APP_VERSION" "$SIGNING_MODE"
+
+      - name: 上传 IPA 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: hghub-ios-ipa
+          path: artifacts/*
+          retention-days: 30
+          if-no-files-found: error

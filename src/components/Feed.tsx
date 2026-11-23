@@ -12,6 +12,7 @@ import PlaybackLock from "./PlaybackLock";
 import { registerBackHandler } from "../back";
 import { useVerticalSwipe } from './useVerticalSwipe';
 import type { PreparedMedia } from "../plugins/client";
+import { toggleVideoPictureInPicture } from "../plugins/iosPlayback";
 import { IMore, IHeart, IHeartF, IPip, IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IList, ILockF, IPauseF, IPlayF, ISearch, ISettings, IVol, IVolMute } from "../icons";
 
 export type PlayerPanel = "detail" | "episodes" | "comments" | "playback";
@@ -525,9 +526,8 @@ export default function Feed({media, position, active=true, preparing=false, err
   const togglePip = async () => {
     try {
       const v = videoRef.current?.el();
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (v && document.pictureInPictureEnabled) await v.requestPictureInPicture();
-      else toast("当前环境不支持画中画", "info");
+      const result = await toggleVideoPictureInPicture(v, document);
+      if (result === "unsupported") toast("当前环境不支持画中画", "info");
     } catch { toast("画中画开启失败", "info"); }
   };
 

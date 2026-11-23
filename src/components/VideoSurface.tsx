@@ -2,8 +2,15 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import Hls from "hls.js";
 import workerPath from 'hls.js/dist/hls.worker.js?url';
 import { hlsPlaybackPath } from '../plugins/mediaCapabilities';
+import { isVideoInPictureInPicture } from '../plugins/iosPlayback';
 import { playbackTiming } from '../plugins/playbackTiming';
 import { pluginCommand, type PreparedMedia } from "../plugins/client";
+
+declare module "react" {
+  interface VideoHTMLAttributes<T> {
+    "x-webkit-airplay"?: "allow" | "deny";
+  }
+}
 
 export interface VideoHandle {
   el: () => HTMLVideoElement | null;
@@ -58,7 +65,7 @@ export default forwardRef<VideoHandle, Props>(function VideoSurface(props, forwa
     const metadata=()=>{if(p.position>0&&Number.isFinite(v.duration))v.currentTime=Math.min(p.position,Math.max(0,v.duration-.15));if(latest.current.active&&wantsPlay.current)play();};
     const playing=()=>{if(!disposed){activity(true);latest.current.onPlaying();}};
     const paused=()=>{if(!disposed&&v.paused){activity(false);latest.current.onTime(v.currentTime);if(!v.ended){if(wantsPlay.current&&latest.current.active&&v.readyState<3)latest.current.onWaiting();else latest.current.onPause();}}};
-    const visibility=()=>{if(document.hidden){resume=!v.paused;v.pause();hls.current?.stopLoad();}else if(resume){resume=false;if(latest.current.active){hls.current?.startLoad(v.currentTime);play();}}};
+    const visibility=()=>{if(document.hidden){if(isVideoInPictureInPicture(v,document))return;resume=!v.paused;v.pause();hls.current?.stopLoad();}else if(resume){resume=false;if(latest.current.active){hls.current?.startLoad(v.currentTime);play();}}};
     v.muted=p.muted;v.volume=p.volume;v.playbackRate=p.rate;
     v.addEventListener("loadedmetadata",metadata);v.addEventListener("error",fail);v.addEventListener("playing",playing);v.addEventListener("pause",paused);document.addEventListener("visibilitychange",visibility);
     if(p.media.format==="hls"&&hlsPlaybackPath(v)==="mse"){
@@ -73,11 +80,11 @@ export default forwardRef<VideoHandle, Props>(function VideoSurface(props, forwa
     return()=>{disposed=true;playAttempt.current++;if(firstFrame!==undefined)v.cancelVideoFrameCallback(firstFrame);clearTimeout(timer);activity(false);document.removeEventListener("visibilitychange",visibility);v.removeEventListener("loadedmetadata",metadata);v.removeEventListener("error",fail);v.removeEventListener("playing",playing);v.removeEventListener("pause",paused);hls.current?.destroy();hls.current=null;v.pause();v.removeAttribute("src");v.load();};
   },[props.media.sessionId,props.media.version]);
   useEffect(()=>{const v=ref.current;if(v){v.muted=props.muted;v.volume=props.volume;v.playbackRate=props.rate;}},[props.muted,props.volume,props.rate]);
-  useEffect(()=>{if(!props.active||document.hidden){ref.current?.pause();hls.current?.stopLoad();}else if(hls.current)hls.current.startLoad(ref.current?.currentTime||props.position);},[props.active,props.media.sessionId,props.media.version]);
+  useEffect(()=>{const v=ref.current;if(!props.active||(document.hidden&&!isVideoInPictureInPicture(v,document))){v?.pause();hls.current?.stopLoad();}else if(hls.current)hls.current.startLoad(v?.currentTime||props.position);},[props.active,props.media.sessionId,props.media.version]);
   const dimensions=()=>{const v=ref.current!;if(Number.isFinite(v.duration))latest.current.onDuration(v.duration);if(v.videoWidth)latest.current.onSize(v.videoWidth,v.videoHeight);};
   const buffered=(v:HTMLVideoElement)=>{props.onBuffered(v.duration&&v.buffered.length?v.buffered.end(v.buffered.length-1)/v.duration:0);let ahead=0;for(let i=0;i<v.buffered.length;i++)if(v.buffered.start(i)<=v.currentTime+.1&&v.buffered.end(i)>v.currentTime)ahead=v.buffered.end(i)-v.currentTime;props.onBuffer?.(ahead);};
   return <div className="absolute inset-0 overflow-hidden" onClick={props.onClick}>
-    <video ref={ref} playsInline preload="auto" autoPlay={props.autoPlay && props.active} crossOrigin="anonymous" poster={props.poster} className="w-full h-full"
+    <video ref={ref} playsInline x-webkit-airplay="allow" preload="auto" autoPlay={props.autoPlay && props.active} crossOrigin="anonymous" poster={props.poster} className="w-full h-full"
       style={{objectFit:props.fit,transform:`translate(${props.panX}px, ${props.panY}px) scale(${props.scale})`,transition:props.isGesturing?"none":"transform .18s ease"}}
       onLoadedMetadata={dimensions} onLoadedData={dimensions} onTimeUpdate={e=>{props.onTime(e.currentTarget.currentTime);buffered(e.currentTarget);}}
       onProgress={e=>buffered(e.currentTarget)}

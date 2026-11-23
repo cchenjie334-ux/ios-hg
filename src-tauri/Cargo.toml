@@ -61,6 +61,13 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
 
+# iOS 音频会话与屏幕方向控制需要动态调用 AVFoundation / UIKit Objective-C 运行时（见 src/ios_platform.rs）。
+# 复用 Cargo.lock 中已有的 block2 / objc2 / objc2-foundation 版本，不引入新依赖。
+[target.'cfg(target_os = "ios")'.dependencies]
+block2 = "0.6"
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+
 # Avoid invalid incremental object references on filesystems without hard links.
 [profile.dev]
 incremental = false

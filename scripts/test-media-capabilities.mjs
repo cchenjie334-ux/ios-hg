@@ -11,7 +11,7 @@ const bundle = await build({ entryPoints: ['src/plugins/mediaCapabilities.ts', '
   } }],
 });
 const load = name => import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles.find(f => f.path.endsWith(name)).text).toString('base64')}`);
-const { probeMediaCapabilities, hlsPlaybackPath } = await load('mediaCapabilities.js');
+const { probeMediaCapabilities, hlsPlaybackPath, isIosUserAgent } = await load('mediaCapabilities.js');
 const mime = { h264: 'avc1.', hevc: 'hvc1.', av1: 'av01.' };
 function setup({ file = [], mse = [], hls = false, native = false, maybe = false, audio = true } = {}) {
   const supports = (type, codecs) => type.startsWith('audio/') ? audio : codecs.some(c => type.includes(mime[c]));
@@ -38,6 +38,18 @@ setup({ file: ['h264'], maybe: true });
 assert.deepEqual(probeMediaCapabilities(), { codecs: [], formats: [] });
 setup({ file: ['h264'], mse: ['h264'], hls: true, audio: false });
 assert.deepEqual(probeMediaCapabilities(), { codecs: [], formats: [] });
+
+// iOS WebKit: prefer native AVPlayer HLS over ManagedMediaSource when native HLS works.
+assert.equal(isIosUserAgent('Node.js/22', 0), false);
+assert.equal(isIosUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)', 5), true);
+assert.equal(isIosUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 5), true);
+assert.equal(isIosUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 0), false);
+const iosVideo = setup({ file: ['h264', 'hevc'], mse: ['h264'], hls: true, native: true });
+assert.equal(hlsPlaybackPath(iosVideo), 'mse');
+assert.equal(hlsPlaybackPath(iosVideo, true), 'native');
+assert.deepEqual(probeMediaCapabilities(true), { codecs: ['h264', 'hevc'], formats: ['hls', 'progressive'] });
+const iosNoNativeVideo = setup({ file: ['h264'], mse: ['h264'], hls: true, native: false });
+assert.equal(hlsPlaybackPath(iosNoNativeVideo, true), 'mse');
 
 // First plugin commands must await one registration. Failure must not execute a
 // command using a stale/default environment; the next user action can retry.

@@ -2,6 +2,8 @@ mod commands;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
+#[cfg(target_os = "ios")]
+mod ios_platform;
 mod network_policy;
 mod plugins;
 #[cfg(target_os = "windows")]
@@ -60,6 +62,8 @@ pub fn run() {
             // plugin command; eager initialization would expose an incorrect env.
             #[cfg(target_os = "macos")]
             macos_titlebar::create_main_window(app)?;
+            #[cfg(target_os = "ios")]
+            ios_platform::configure_audio_session();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
